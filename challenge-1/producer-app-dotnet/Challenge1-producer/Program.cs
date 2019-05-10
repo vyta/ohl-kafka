@@ -1,18 +1,19 @@
-﻿using System;
-using System.Data.SqlClient;
+﻿using Confluent.Kafka;
+using Confluent.Kafka.Serialization;
+using Confluent.SchemaRegistry;
 using Dapper;
-using System.Linq;
-using System.Threading.Tasks;
-using System.Collections.Generic;
-using System.Data;
+using Newtonsoft.Json;
+using NLog;
 using NLog.Config;
 using NLog.Targets;
-using NLog;
+using System;
+using System.Collections.Generic;
 using System.Configuration;
-using Confluent.Kafka;
+using System.Data;
+using System.Data.SqlClient;
+using System.Linq;
 using System.Threading;
-using Newtonsoft.Json.Linq;
-using Newtonsoft.Json;
+using System.Threading.Tasks;
 
 namespace Challenge1_producer
 {
@@ -33,16 +34,18 @@ namespace Challenge1_producer
         private Logger _logger;
         private readonly string BrokerList;
         private readonly string TopicName;
+        private readonly string SchemaRegistry;
         private CancellationTokenSource _cancellationTokenSource;
         private CancellationToken _cancellationToken;
 
         private volatile int _sleepTime = 1000; // msec
 
-        public BadgeProducer(string _connectionString, string brokerList, string topic)
+        public BadgeProducer(string _connectionString, string brokerList, string topic, string schemaRegistry)
         {
             this._connectionString = _connectionString;
             BrokerList = brokerList;
             TopicName = topic;
+            SchemaRegistry = schemaRegistry;
 
             this._cancellationTokenSource = new CancellationTokenSource();
             this._cancellationToken = _cancellationTokenSource.Token;
@@ -89,7 +92,7 @@ namespace Challenge1_producer
         private async Task<IEnumerable<BadgeEvent>> GetBadgeEvent()
         {
             _logger.Info($"Getting Badge events from database...");
-            
+
             using (var connection = new SqlConnection(_connectionString))
             {
                 var badgeEvents = await connection.QueryAsync<BadgeEvent>(
@@ -104,12 +107,25 @@ namespace Challenge1_producer
 
         private async void SendBadgeEvent()
         {
-            var config = new ProducerConfig();
 
-            config.BootstrapServers = BrokerList;
-            config.MessageTimeoutMs = 1000;
+            using (var schemaRegistry = new CachedSchemaRegistryClient(new SchemaRegistryConfig { SchemaRegistryUrl = SchemaRegistry }) )
+            {
 
-            using (var producer = new ProducerBuilder<string, string>(config).Build())
+            
+
+            var config = new Dictionary<string, string>
+            {
+                { "bootstrap.servers", BrokerList },
+                { "schema.registry.url", SchemaRegistry }
+            };
+            var avroSerializer = new AvroSerializer<BadgeEvent>(schemaRegistry);
+
+            avroSerializer.Configure(new Dictionary<string, string> { { "avro.serializer.auto.register.schemas", "false" } }, true);
+
+            using (var producer =
+                new ProducerBuilder<Null, BadgeEvent>(config)
+                    .SetValueSerializer((Confluent.Kafka.ISerializer<BadgeEvent>) avroSerializer)
+                    .Build())
             {
                 while (!_cancellationToken.IsCancellationRequested)
                 {
@@ -122,7 +138,7 @@ namespace Challenge1_producer
                         var p = JsonConvert.SerializeObject(b);
                         try
                         {
-                            var deliveryReport = await producer.ProduceAsync(TopicName, new Message<string, string> { Value = p.ToString() });
+                            var deliveryReport = await producer.ProduceAsync(TopicName, new Message<Null, BadgeEvent> { Value = b });
 
                             _logger.Info($"Badge delivered to: {deliveryReport.TopicPartitionOffset}");
                         }
@@ -147,6 +163,7 @@ namespace Challenge1_producer
                 }
             }
         }
+        }
     }
 
     public class SendEvent
@@ -165,8 +182,8 @@ namespace Challenge1_producer
     {
         static async Task Main(string[] args)
         {
-            try 
-            { 
+            try
+            {
                 SqlConnectionStringBuilder builder = new SqlConnectionStringBuilder();
                 builder.DataSource = ConfigurationManager.AppSettings["AZURE_SQL"];
                 builder.UserID = ConfigurationManager.AppSettings["AZURE_SQL_USERNAME"];
@@ -181,15 +198,16 @@ namespace Challenge1_producer
 
                 string brokerList = ConfigurationManager.AppSettings["KAFKA_BROKERS"];
                 string topic = ConfigurationManager.AppSettings["KAFKA_TOPIC"];
+                string schemaRegistry = ConfigurationManager.AppSettings["SCHEMA_REGISTRY"];
 
-                BadgeProducer b = new BadgeProducer(connectionString, brokerList, topic);
+                BadgeProducer b = new BadgeProducer(connectionString, brokerList, topic, schemaRegistry);
                 await b.Run();
 
             }
             catch (SqlException e)
             {
                 Console.WriteLine(e.ToString());
-            } 
+            }
         }
     }
 }
