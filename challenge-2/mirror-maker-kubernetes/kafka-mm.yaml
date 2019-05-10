@@ -36,17 +36,17 @@ spec:
         - name: "WHITELIST"
           value: ".*"
         - name: "CONSUMER_IP"
-          value: "KAFKA_ENDPOINT:KAFKA_PORT"
+          value: "40.117.120.250:31090"
         - name: "CONSUMER_CLIENT_ID"
           value: "mirror_maker_consumer" 
         - name: "CONSUMER_GROUP_ID"
-          value: "example-mirrormaker-group" 
+          value: "mirrormaker" 
         - name: "PRODUCER_ENDPOINT"
-          value: "EH_NAMESPACE.servicebus.windows.net:9093" 
+          value: "t8hack-kafka-eh.servicebus.windows.net:9093" 
         - name: "PRODUCER_CLIENT_ID"
           value: "mirror_maker_producer" 
         - name: "PRODUCER_PASSWORD"
-          value: "EH_CONNECTIONSTRING"
+          value: "Endpoint=sb://t8hack-kafka-eh.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=XKOpLGzIqF35Wt4wMOOxV6f/t+2N/XH0J5+lXg9Mhg8="
       volumes:
       - name: vol
         configMap:
