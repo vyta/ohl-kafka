@@ -1,4 +1,6 @@
-﻿using Confluent.Kafka;
+﻿using Avro;
+using Avro.Specific;
+using Confluent.Kafka;
 using Confluent.Kafka.Serialization;
 using Confluent.SchemaRegistry;
 using Dapper;
@@ -17,15 +19,20 @@ using System.Threading.Tasks;
 
 namespace Challenge1_producer
 {
-    public class BadgeEvent
+    public class BadgeEvent : ISpecificRecord
     {
         public string Id { get; set; }
         public string Name { get; set; }
         public string UserId { get; set; }
         public string DisplayName { get; set; }
         public string Reputation { get; set; }
-        public string UpVotes { get; set; }
-        public string DownVotes { get; set; }
+        public int UpVotes { get; set; }
+        public int DownVotes { get; set; }
+
+        public Avro.Schema Schema => throw new NotImplementedException(@"GOT YOU SCHEMA!");
+
+        public object Get(int fieldPos) => throw new NotImplementedException(@"GOT YOU GET!");
+        public void Put(int fieldPos, object fieldValue) => throw new NotImplementedException(@"GOT YOU PUT!");
     }
 
     public class BadgeProducer
@@ -108,61 +115,51 @@ namespace Challenge1_producer
         private async void SendBadgeEvent()
         {
 
-            using (var schemaRegistry = new CachedSchemaRegistryClient(new SchemaRegistryConfig { SchemaRegistryUrl = SchemaRegistry }) )
+            using (var schemaRegistry = new CachedSchemaRegistryClient(new SchemaRegistryConfig { SchemaRegistryUrl = SchemaRegistry }))
             {
-
-            
-
-            var config = new Dictionary<string, string>
-            {
-                { "bootstrap.servers", BrokerList },
-                { "schema.registry.url", SchemaRegistry }
-            };
-            var avroSerializer = new AvroSerializer<BadgeEvent>(schemaRegistry);
-
-            avroSerializer.Configure(new Dictionary<string, string> { { "avro.serializer.auto.register.schemas", "false" } }, true);
-
-            using (var producer =
-                new ProducerBuilder<Null, BadgeEvent>(config)
-                    .SetValueSerializer((Confluent.Kafka.ISerializer<BadgeEvent>) avroSerializer)
-                    .Build())
-            {
-                while (!_cancellationToken.IsCancellationRequested)
+                var config = new ProducerConfig
                 {
-                    var badgeEvent = await GetBadgeEvent();
+                    BootstrapServers = BrokerList
+                };
 
-                    foreach (var b in badgeEvent)
+                var avroSerializer = new Confluent.SchemaRegistry.Serdes.AvroSerializer<BadgeEvent>(schemaRegistry,
+                    config: new Dictionary<string, string> { { "avro.serializer.auto.register.schemas", "false" } });
+
+                using (var producer =
+                    new ProducerBuilder<Null, BadgeEvent>(config)
+                        .SetValueSerializer(avroSerializer)
+                        .Build())
+                {
+                    while (!_cancellationToken.IsCancellationRequested)
                     {
-                        _logger.Info("Sending Badge to Kafka...");
+                        var badgeEvent = await GetBadgeEvent();
 
-                        var p = JsonConvert.SerializeObject(b);
-                        try
+                        foreach (var badge in badgeEvent)
                         {
-                            var deliveryReport = await producer.ProduceAsync(TopicName, new Message<Null, BadgeEvent> { Value = b });
+                            _logger.Info("Sending Badge to Kafka...");
 
-                            _logger.Info($"Badge delivered to: {deliveryReport.TopicPartitionOffset}");
-                        }
-                        catch (ProduceException<string, string> exception)
-                        {
-                            _logger.Error(exception, $"Failed to deliver message: {exception.Message} [{exception.Error.Code}]");
-                            break;
-                        }
-                        catch (Exception exception)
-                        {
-                            _logger.Error(exception, $"Failed to deliver message: {exception.Message}");
-                            break;
-                        }
-                    }
+                            try
+                            {
+                                var deliveryReport = await producer.ProduceAsync(TopicName, new Message<Null, BadgeEvent> { Value = badge });
 
-                    await Task.Delay(_sleepTime);
+                                _logger.Info($"Badge delivered to: {deliveryReport.TopicPartitionOffset}");
+                            }
+                            catch (ProduceException<string, string> exception)
+                            {
+                                _logger.Error(exception, $"Failed to deliver message: {exception.Message} [{exception.Error.Code}]");
+                                break;
+                            }
+                            catch (Exception exception)
+                            {
+                                _logger.Error(exception, $"Failed to deliver message: {exception.Message}");
+                                break;
+                            }
+                        }
 
-                    if (_cancellationToken.IsCancellationRequested)
-                    {
-                        break;
+                        await Task.Delay(_sleepTime);
                     }
                 }
             }
-        }
         }
     }
 
